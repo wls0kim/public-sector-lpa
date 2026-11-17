@@ -1,0 +1,140 @@
+---
+title: "공무원 하위 집단 탐색: 조직, 직무, 직업 차원 잠재 프로파일 분석"
+author: "김진영"
+date: "2024-08-13"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+---
+
+2023 공직생활실태조사로 공무원의 하위 집단을 세 가지 차원(조직, 직무, 직업)에서 잠재 프로파일 분석(LPA)으로 탐색했습니다. 세대 구분 대신 응답 패턴으로 집단을 나눴을 때 이직의도와 직무만족이 집단마다 어떻게 다른지 비교하는 것이 목적입니다. 2024 한국심리학회 연차학술대회 포스터와 BK21 아이디어 공모전(2025, 대상)의 분석입니다.
+
+- 필요한 파일: `gong_2023.csv` (2023 공직생활실태조사)
+- 차원마다 같은 순서로 진행합니다: 프로파일 지표 계산 → 프로파일 2~4개 모형 비교 → 최종 모형 선택 → 집단별 지표 평균, 연령대 분포 → 집단별 이직의도(q38)와 직무만족 비교(분산분석, Tukey)
+
+| 차원 | 프로파일 지표 | 최종 프로파일 수 |
+|---|---|---|
+| 조직 | 조직몰입, 과업지향 문화, 혁신지향 문화, 관계지향 문화, 위계지향 문화, 보수와 보상 | 3 |
+| 직무 | 공공봉사동기, 업무자율성, 역할갈등, 역할모호성, 업무 과중 | 3 |
+| 직업 | 공직만족도, 배치전환, 전문성, 공직 평판, 부정부패 | 4 |
+
+## 1. 준비
+
+```{r setup, message = FALSE}
+library(dplyr)
+library(tidyLPA)  # 잠재 프로파일 분석 (내부적으로 mclust 사용)
+```
+
+```{r}
+data <- read.csv("gong_2023.csv")
+
+# 결과변수: 직무만족(문항 평균)과 이직의도(q38, 5점)
+data$job_satisfaction <- rowMeans(data[, c("q36_1", "q36_2", "q36_3")], na.rm = TRUE)
+```
+
+### 1.1. 분석 함수
+
+세 차원에 같은 절차를 적용하기 위해 함수로 묶었습니다.
+
+```{r}
+# 1) 프로파일 수 2~4개 모형의 적합도와 집단별 사례 수 비교
+compare_profiles <- function(indicators) {
+  fits <- estimate_profiles(indicators, n_profiles = 2:4)
+  print(fits)  # AIC, BIC, 엔트로피 등
+  for (k in 2:4) {
+    cat("\n프로파일", k, "개 모형의 집단별 사례 수\n")
+    print(table(fits[[paste0("model_1_class_", k)]][["dff"]][["Class"]]))
+  }
+  invisible(fits)
+}
+
+# 2) 최종 모형 적합 후 집단 번호 반환
+fit_final_profiles <- function(indicators, k) {
+  fit <- estimate_profiles(indicators, n_profiles = k, return_data = TRUE)
+  print(fit)
+  fit[[paste0("model_1_class_", k)]]$dff$Class
+}
+
+# 3) 집단별 지표 평균, 연령대(DM3) 분포, 결과변수 비교
+describe_profiles <- function(data, indicators, class_var) {
+  d <- as_tibble(cbind(data, indicators))  # tibble이어야 print(n = Inf)가 동작
+  d$class <- factor(data[[class_var]])
+
+  cat("\n[집단별 사례 수]\n")
+  print(table(d$class))
+
+  cat("\n[집단별 프로파일 지표 평균]\n")
+  print(d %>% group_by(class) %>%
+          summarise(across(all_of(names(indicators)), ~ mean(.x, na.rm = TRUE))),
+        n = Inf, width = Inf)
+
+  cat("\n[집단별 연령대 분포]\n")
+  print(d %>% dplyr::count(class, DM3) %>% arrange(class, desc(n)), n = Inf)
+
+  cat("\n[집단별 이직의도와 직무만족]\n")
+  print(d %>% group_by(class) %>%
+          summarise(q38_mean = mean(q38, na.rm = TRUE),
+                    q38_sd   = sd(q38, na.rm = TRUE),
+                    job_satisfaction_mean = mean(job_satisfaction, na.rm = TRUE),
+                    job_satisfaction_sd   = sd(job_satisfaction, na.rm = TRUE)))
+
+  for (dv in c("q38", "job_satisfaction")) {
+    cat("\n[", dv, ": 일원 분산분석과 Tukey 사후검정]\n")
+    a <- aov(reformulate("class", dv), data = d)
+    print(summary(a))
+    print(TukeyHSD(a))
+  }
+}
+```
+
+## 2. 조직 차원
+
+```{r}
+org_data <- data.frame(
+  commitment                    = rowMeans(data[, c("q35_1", "q35_2", "q35_3", "q35_4")], na.rm = TRUE),  # 조직몰입
+  task_oriented_culture         = rowMeans(data[, c("q21_1", "q21_2")], na.rm = TRUE),                    # 과업지향 문화
+  innovation_oriented_culture   = rowMeans(data[, c("q21_3", "q21_7")], na.rm = TRUE),                    # 혁신지향 문화
+  relationship_oriented_culture = rowMeans(data[, c("q21_4", "q21_8")], na.rm = TRUE),                    # 관계지향 문화
+  hierarchical_culture          = rowMeans(data[, c("q21_5", "q21_6")], na.rm = TRUE),                    # 위계지향 문화
+  compensation_rewards          = rowMeans(data[, c("q11_1", "q11_2", "q11_3", "q11_4")], na.rm = TRUE)   # 보수와 보상
+)
+
+compare_profiles(org_data)
+data$org_class <- fit_final_profiles(org_data, k = 3)
+describe_profiles(data, org_data, "org_class")
+```
+
+## 3. 직무 차원
+
+```{r}
+job_data <- data.frame(
+  public_service = rowMeans(data[, paste0("q30_", 1:6)], na.rm = TRUE),  # 공공봉사동기
+  job_autonomy   = rowMeans(data[, paste0("q4_", 1:3)],  na.rm = TRUE),  # 업무자율성
+  role_conflict  = rowMeans(data[, paste0("q31_", 1:3)], na.rm = TRUE),  # 역할갈등
+  role_ambiguity = rowMeans(data[, paste0("q31_", 4:6)], na.rm = TRUE),  # 역할모호성
+  work_overload  = data$q31_7                                            # 업무 과중 (단일 문항)
+)
+
+compare_profiles(job_data)
+data$job_class <- fit_final_profiles(job_data, k = 3)
+describe_profiles(data, job_data, "job_class")
+```
+
+## 4. 직업 차원
+
+```{r}
+work_data <- data.frame(
+  public_job_satisfaction = rowMeans(data[, paste0("q37_", 1:4)], na.rm = TRUE),  # 공직만족도
+  job_rotation            = rowMeans(data[, paste0("q10_", 1:3)], na.rm = TRUE),  # 배치전환
+  professional            = data$q16_1,                                           # 전문성 (단일 문항)
+  reputation              = data$q37_1,                                           # 공직 평판 (단일 문항, 공직만족도 첫 문항과 같음)
+  corruption              = data$q29                                              # 부정부패 (단일 문항)
+)
+
+compare_profiles(work_data)
+data$work_class <- fit_final_profiles(work_data, k = 4)
+describe_profiles(data, work_data, "work_class")
+```
